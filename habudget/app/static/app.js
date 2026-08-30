@@ -326,6 +326,39 @@
     if (changed) persist();
   }
 
+  // Manually correct a single past (or current) month for one loan/goal - e.g. an
+  // auto-applied month that should actually have been skipped, or a month that was
+  // skipped but should count as done after all. Idempotent either way: re-marking
+  // an already-matching month is a no-op, not a double application.
+  function markMonthSkipped(item, mk, kind){
+    var existing = (item.historik||[]).filter(function(h){ return h.auto && h.datum === mk + "-01"; })[0];
+    if (existing) {
+      item.historik = item.historik.filter(function(h){ return h !== existing; });
+      if (kind === "loan") item.nuvarande = (item.nuvarande||0) + existing.belopp;
+      else item.sparat = Math.max(0, (item.sparat||0) - existing.belopp);
+    }
+    item.skippedMonths = item.skippedMonths || [];
+    if (item.skippedMonths.indexOf(mk) === -1) item.skippedMonths.push(mk);
+  }
+  function markMonthDone(item, mk, kind){
+    item.skippedMonths = (item.skippedMonths||[]).filter(function(x){ return x !== mk; });
+    var already = (item.historik||[]).some(function(h){ return h.auto && h.datum === mk + "-01"; });
+    if (already) return;
+    item.historik = item.historik || [];
+    if (kind === "loan") {
+      var floor = item.restvarde || 0;
+      var newBalance = Math.max(floor, (item.nuvarande||0) - item.ordinarie);
+      if (newBalance < item.nuvarande) {
+        item.historik.push({ id: uid(), datum: mk + "-01", belopp: item.nuvarande - newBalance, person: item.person||"", auto: true });
+        item.nuvarande = newBalance;
+      }
+    } else {
+      item.sparat = (item.sparat||0) + item.manadsSparande;
+      item.historik.push({ id: uid(), datum: mk + "-01", belopp: item.manadsSparande, person: item.person||"", kommentar: "Automatiskt månadssparande", auto: true });
+    }
+    if (item.lastAutoMonth && mk > item.lastAutoMonth) item.lastAutoMonth = mk;
+  }
+
   // ---------- export ----------
   function csvField(v){
     v = String(v==null?"":v);
@@ -766,14 +799,27 @@
       if (!litem) { ui.modal = null; return ""; }
       body = '<h3>Extra amortering</h3><p class="sub">' + esc(litem.namn) + '</p>' +
         '<div class="field"><label style="font-size:12px;color:var(--text-muted);">Belopp (kr)</label><input id="modal-extra" type="number" min="0" step="0.01" value="" autofocus style="width:100%;"></div>' +
+        '<div class="field"><label style="font-size:12px;color:var(--text-muted);">Datum</label><input id="modal-extra-datum" type="date" value="' + todayStr() + '" style="width:100%;"></div>' +
         '<div class="modal-actions"><button class="btn ghost" data-modal-cancel="1">Avbryt</button><button class="btn primary" data-modal-save="loanExtra">Lagg till</button></div>';
     } else if (mo.type === "goalExtra") {
       var gitem = findItem("goals", mo.goalId);
       if (!gitem) { ui.modal = null; return ""; }
       body = '<h3>Extra insättning</h3><p class="sub">' + esc(gitem.namn) + ' - nuvarande sparat: ' + fmtKr(gitem.sparat) + '</p>' +
         '<div class="field"><label style="font-size:12px;color:var(--text-muted);">Belopp (kr)</label><input id="modal-goal-extra" type="number" min="0" step="0.01" value="" autofocus style="width:100%;"></div>' +
+        '<div class="field"><label style="font-size:12px;color:var(--text-muted);">Datum</label><input id="modal-goal-extra-datum" type="date" value="' + todayStr() + '" style="width:100%;"></div>' +
         '<div class="field"><label style="font-size:12px;color:var(--text-muted);">Kommentar (valfritt)</label><input id="modal-goal-kommentar" placeholder="T.ex. vilket bolag/fond" style="width:100%;"></div>' +
         '<div class="modal-actions"><button class="btn ghost" data-modal-cancel="1">Avbryt</button><button class="btn primary" data-modal-save="goalExtra">Lagg till</button></div>';
+    } else if (mo.type === "monthAdjust") {
+      var maItem = findItem(mo.kind === "loan" ? "loans" : "goals", mo.itemId);
+      if (!maItem) { ui.modal = null; return ""; }
+      var maDefault = maItem.lastAutoMonth || realCurrentMonth();
+      var maNoun = mo.kind === "loan" ? "betalningen" : "insättningen";
+      body = '<h3>Korrigera en tidigare månad</h3><p class="sub">' + esc(maItem.namn) + '</p>' +
+        '<div class="field"><label style="font-size:12px;color:var(--text-muted);">Månad</label><input id="modal-month-adjust" type="month" max="' + realCurrentMonth() + '" value="' + esc(maDefault) + '" autofocus style="width:100%;"></div>' +
+        '<p style="font-size:12px;color:var(--text-muted);margin:4px 0 0;">Välj en tidigare (eller nuvarande) månad och markera om den automatiska ' + maNoun + ' faktiskt genomfördes eller inte – t.ex. om ni glömde markera att en månad skulle hoppas över, eller vill lägga till en som missades. Ändrar totalen och räknar om räntan/tidsuppskattningen efter det.</p>' +
+        '<div class="modal-actions"><button class="btn ghost" data-modal-cancel="1">Avbryt</button>' +
+        '<button class="btn ghost" style="color:var(--warn);" data-modal-save="monthAdjustSkip">Markera som överhoppad</button>' +
+        '<button class="btn primary" data-modal-save="monthAdjustDone">Markera som genomförd</button></div>';
     } else if (mo.type === "changePassword") {
       body = '<h3>Byt lösenord</h3><p class="sub">Ändrar lösenordet för hela appen, för alla enheter (från nästa gång de behöver logga in).</p>' +
         '<div class="field"><label style="font-size:12px;color:var(--text-muted);">Nuvarande lösenord</label><input id="modal-pw-current" type="password" autocomplete="current-password" autofocus style="width:100%;"></div>' +
@@ -1178,6 +1224,7 @@
         '<div class="mini-actions">' +
           '<button class="btn small primary" data-extra="' + l.id + '">+ Extra amortering</button>' +
           (isAutoL ? '<button class="btn small ghost" data-loan-skip="' + l.id + '">Hoppa över ' + esc(monthLabel(nextAutoL).toLowerCase()) + '</button>' : '') +
+          (isAutoL ? '<button class="btn small ghost" data-loan-month-adjust="' + l.id + '">Korrigera tidigare månad</button>' : '') +
           '<button class="btn small ghost" data-edit="loan" data-id="' + l.id + '">Ändra</button>' +
           '<button class="btn small ghost" data-del="loan" data-id="' + l.id + '">Ta bort</button>' +
         '</div>' +
@@ -1235,6 +1282,7 @@
         '<div class="mini-actions">' +
           '<button class="btn small primary" data-goal-extra="' + g.id + '">+ Extra insättning</button>' +
           (isAuto ? '<button class="btn small ghost" data-goal-skip="' + g.id + '">Hoppa över ' + esc(monthLabel(nextAuto).toLowerCase()) + '</button>' : '') +
+          (isAuto ? '<button class="btn small ghost" data-goal-month-adjust="' + g.id + '">Korrigera tidigare månad</button>' : '') +
           '<button class="btn small ghost" data-edit="goal" data-id="' + g.id + '">Ändra</button>' +
           '<button class="btn small ghost" data-del="goal" data-id="' + g.id + '">Ta bort</button>' +
         '</div>' +
@@ -1369,6 +1417,22 @@
         persist();
       });
     });
+    app.querySelectorAll('[data-loan-month-adjust]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var loan = findItem("loans", btn.getAttribute('data-loan-month-adjust'));
+        if (!loan) return;
+        ui.modal = { type: "monthAdjust", kind: "loan", itemId: loan.id };
+        render();
+      });
+    });
+    app.querySelectorAll('[data-goal-month-adjust]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var goal = findItem("goals", btn.getAttribute('data-goal-month-adjust'));
+        if (!goal) return;
+        ui.modal = { type: "monthAdjust", kind: "goal", itemId: goal.id };
+        render();
+      });
+    });
 
     var exportTa = document.getElementById('export-textarea');
     if (exportTa) {
@@ -1470,10 +1534,12 @@
           var loan = findItem("loans", mo.loanId);
           var eInp = document.getElementById('modal-extra');
           var eamt = eInp ? parseFloat(String(eInp.value).replace(',', '.')) : NaN;
+          var eDateInp = document.getElementById('modal-extra-datum');
+          var eDate = (eDateInp && eDateInp.value) ? eDateInp.value : todayStr();
           if (loan && !isNaN(eamt) && eamt > 0) {
             loan.nuvarande = Math.max(0, loan.nuvarande - eamt);
             loan.historik = loan.historik || [];
-            loan.historik.push({ id: uid(), datum: todayStr(), belopp: eamt, person: currentAuthor() });
+            loan.historik.push({ id: uid(), datum: eDate, belopp: eamt, person: currentAuthor() });
             ui.modal = null;
             persist();
           }
@@ -1481,12 +1547,24 @@
           var goal = findItem("goals", mo.goalId);
           var gInp = document.getElementById('modal-goal-extra');
           var gamt = gInp ? parseFloat(String(gInp.value).replace(',', '.')) : NaN;
+          var gDateInp = document.getElementById('modal-goal-extra-datum');
+          var gDate = (gDateInp && gDateInp.value) ? gDateInp.value : todayStr();
           var gkInp = document.getElementById('modal-goal-kommentar');
           var gkommentar = gkInp ? gkInp.value.trim() : '';
           if (goal && !isNaN(gamt) && gamt > 0) {
             goal.sparat = (goal.sparat || 0) + gamt;
             goal.historik = goal.historik || [];
-            goal.historik.push({ id: uid(), datum: todayStr(), belopp: gamt, person: currentAuthor(), kommentar: gkommentar });
+            goal.historik.push({ id: uid(), datum: gDate, belopp: gamt, person: currentAuthor(), kommentar: gkommentar });
+            ui.modal = null;
+            persist();
+          }
+        } else if (kind === "monthAdjustSkip" || kind === "monthAdjustDone") {
+          var maItem2 = findItem(mo.kind === "loan" ? "loans" : "goals", mo.itemId);
+          var maInp = document.getElementById('modal-month-adjust');
+          var maMonth = maInp ? maInp.value : "";
+          if (maItem2 && maMonth) {
+            if (kind === "monthAdjustSkip") markMonthSkipped(maItem2, maMonth, mo.kind);
+            else markMonthDone(maItem2, maMonth, mo.kind);
             ui.modal = null;
             persist();
           }
