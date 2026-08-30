@@ -277,6 +277,55 @@
   }
   function totalSaved(list){ return sum(list || state.goals, function(x){ return x.sparat; }); }
 
+  // ---------- automatic monthly progress ----------
+  // Goals with a set "Sparande/mån" and loans with an "Ordinarie betalning/mån" are
+  // assumed to happen every month by default (unless explicitly skipped) - this
+  // catches each item up from its lastAutoMonth to the real current month, adding
+  // one historik entry per month actually applied. A goal without manadsSparande
+  // (e.g. irregular stock savings) is never touched - there's nothing to automate.
+  function realCurrentMonth(){ return monthKeyFromDate(new Date()); }
+  function nextAutoMonthFor(item){ return shiftMonth(item.lastAutoMonth || realCurrentMonth(), 1); }
+  function applyAutoProgress(){
+    var cur = realCurrentMonth();
+    var changed = false;
+    (state.goals||[]).forEach(function(g){
+      if (!(g.manadsSparande > 0)) return;
+      if (!g.lastAutoMonth) { g.lastAutoMonth = cur; changed = true; return; } // seen for the first time - start from now, no backfill
+      var m = shiftMonth(g.lastAutoMonth, 1);
+      while (m <= cur) {
+        if ((g.skippedMonths||[]).indexOf(m) === -1) {
+          g.sparat = (g.sparat||0) + g.manadsSparande;
+          g.historik = g.historik || [];
+          g.historik.push({ id: uid(), datum: m + "-01", belopp: g.manadsSparande, person: g.person||"", kommentar: "Automatiskt månadssparande", auto: true });
+        }
+        g.lastAutoMonth = m;
+        changed = true;
+        m = shiftMonth(m, 1);
+      }
+    });
+    (state.loans||[]).forEach(function(l){
+      if (!(l.ordinarie > 0) || !l.startdatum) return;
+      if (!l.lastAutoMonth) { l.lastAutoMonth = cur; changed = true; return; }
+      var endMonth = l.slutdatum ? l.slutdatum.slice(0,7) : null;
+      var m = shiftMonth(l.lastAutoMonth, 1);
+      while (m <= cur && (!endMonth || m <= endMonth)) {
+        if ((l.skippedMonths||[]).indexOf(m) === -1) {
+          var floor = l.restvarde || 0;
+          var newBalance = Math.max(floor, (l.nuvarande||0) - l.ordinarie);
+          if (newBalance < l.nuvarande) {
+            l.historik = l.historik || [];
+            l.historik.push({ id: uid(), datum: m + "-01", belopp: l.nuvarande - newBalance, person: l.person||"", auto: true });
+            l.nuvarande = newBalance;
+          }
+        }
+        l.lastAutoMonth = m;
+        changed = true;
+        m = shiftMonth(m, 1);
+      }
+    });
+    if (changed) persist();
+  }
+
   // ---------- export ----------
   function csvField(v){
     v = String(v==null?"":v);
@@ -351,10 +400,10 @@
     });
     rows.push([]);
     rows.push(["LÅN & SKULDER (nuvarande saldo)"]);
-    rows.push(["Namn","Person","Ursprungligt belopp","Ränta (%)","Nuvarande skuld","Ordinarie betalning/mån","Startdatum","Slutdatum","Sista betalning (om annan)","Restvärde vid slut","Ränta enligt Klarna (om känd)","Ränta betald hittills (uppsk.)","Total räntekostnad (uppsk.)"]);
+    rows.push(["Namn","Person","Ursprungligt belopp","Ränta (%)","Nuvarande skuld","Ordinarie betalning/mån","Startdatum","Slutdatum","Sista betalning (om annan)","Restvärde vid slut","Ränta enligt Klarna (om känd)","Ränta betald hittills (uppsk.)","Total räntekostnad (uppsk.)","Senast auto-betald månad","Överhoppade månader"]);
     (state.loans||[]).forEach(function(l){
       var a = loanAmortizationEstimate(l);
-      rows.push([l.namn, l.person||"", l.ursprungligt, l.ranta, l.nuvarande, l.ordinarie, l.startdatum||"", l.slutdatum||"", l.sistaBetalning||"", l.restvarde||"", l.rantaOverride||"", a?Math.round(a.interestSoFar*100)/100:"", a?Math.round(a.totalInterest*100)/100:""]);
+      rows.push([l.namn, l.person||"", l.ursprungligt, l.ranta, l.nuvarande, l.ordinarie, l.startdatum||"", l.slutdatum||"", l.sistaBetalning||"", l.restvarde||"", l.rantaOverride||"", a?Math.round(a.interestSoFar*100)/100:"", a?Math.round(a.totalInterest*100)/100:"", l.lastAutoMonth||"", (l.skippedMonths||[]).join(",")]);
     });
     rows.push([]);
     rows.push(["EXTRA AMORTERINGAR" + (period.mode==="all" ? "" : " (" + exportPeriodLabel(period) + ")")]);
@@ -368,8 +417,8 @@
     });
     rows.push([]);
     rows.push(["SPARANDE & MÅL (nuvarande läge)"]);
-    rows.push(["Namn","Person","Målbelopp","Sparat","Sparande/mån","Kommentar"]);
-    (state.goals||[]).forEach(function(g){ rows.push([g.namn, g.person||"", g.mal||"", g.sparat, g.manadsSparande||"", g.kommentar||""]); });
+    rows.push(["Namn","Person","Målbelopp","Sparat","Sparande/mån","Kommentar","Senast auto-sparad månad","Överhoppade månader"]);
+    (state.goals||[]).forEach(function(g){ rows.push([g.namn, g.person||"", g.mal||"", g.sparat, g.manadsSparande||"", g.kommentar||"", g.lastAutoMonth||"", (g.skippedMonths||[]).join(",")]); });
     rows.push([]);
     rows.push(["SPARANDE - INSÄTTNINGAR" + (period.mode==="all" ? "" : " (" + exportPeriodLabel(period) + ")")]);
     rows.push(["Sparmål","Datum","Person","Kommentar","Belopp"]);
@@ -467,6 +516,7 @@
               startdatum: row[6]||"", slutdatum: row[7]||"",
               sistaBetalning: parseFloat(row[8])||0, restvarde: parseFloat(row[9])||0,
               rantaOverride: parseFloat(row[10])||0,
+              lastAutoMonth: row[13]||"", skippedMonths: (row[14]||"").split(",").filter(Boolean),
               historik: []
             };
             result.loans.push(loan);
@@ -500,7 +550,8 @@
         while (i < rows.length && !isBlank(rows[i])) {
           var row = rows[i];
           if (row[0]) {
-            var goal = { id: uid(), namn: row[0], person: row[1]||"", mal: parseFloat(row[2])||0, sparat: parseFloat(row[3])||0, manadsSparande: parseFloat(row[4])||0, kommentar: row[5]||"", historik: [] };
+            var goal = { id: uid(), namn: row[0], person: row[1]||"", mal: parseFloat(row[2])||0, sparat: parseFloat(row[3])||0, manadsSparande: parseFloat(row[4])||0, kommentar: row[5]||"",
+              lastAutoMonth: row[6]||"", skippedMonths: (row[7]||"").split(",").filter(Boolean), historik: [] };
             result.goals.push(goal);
             goalByName[row[0]] = goal;
             addPerson(row[1]);
@@ -575,6 +626,7 @@
   var lastPongAt = 0;
   var receivingRemote = false; // true while applying a state message from the server, to avoid feedback loops
   var pendingState = null; // last edit we tried to send but haven't had confirmed by the server yet
+  var autoProgressChecked = false; // run the once-per-session monthly auto-progress catch-up exactly once
 
   function wsUrl(){
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -644,6 +696,7 @@
         receivingRemote = false;
         canPublish = true;
         publishChecked = true;
+        if (!autoProgressChecked) { autoProgressChecked = true; applyAutoProgress(); }
         if (unlockedYet && !activeElementIsFormField()) render();
       }
     });
@@ -1088,6 +1141,9 @@
       var paid = Math.max(0, l.ursprungligt - l.nuvarande);
       var amortizableL = Math.max(0, l.ursprungligt - (l.restvarde||0));
       var pct = amortizableL > 0 ? Math.min(100, Math.round(paid/amortizableL*100)) : 0;
+      var isAutoL = l.ordinarie > 0 && !!l.startdatum;
+      var nextAutoL = isAutoL ? nextAutoMonthFor(l) : null;
+      var skippedL = l.skippedMonths || [];
       var hist = (l.historik||[]).slice().sort(function(a,b){return b.datum.localeCompare(a.datum);}).slice(0,4).map(function(h){
         return '<div class="kv"><span>' + esc(h.datum) + ' · ' + esc(h.person||"") + '</span><b>+' + fmtKr(h.belopp) + '</b></div>';
       }).join("");
@@ -1115,10 +1171,13 @@
         '<div class="kv"><span>Ränta</span><b>' + (l.ranta||0) + ' %</b></div>' +
         '<div class="kv"><span>Ordinarie betalning/mån</span><b>' + fmtKr(l.ordinarie) + '</b></div>' +
         (l.restvarde > 0 ? '<div class="kv"><span>Restvärde vid lånets slut</span><b>' + fmtKr(l.restvarde) + '</b></div>' : '') +
+        (isAutoL ? '<div class="kv"><span>Nästa automatiska betalning</span><b>' + esc(monthLabel(nextAutoL)) + '</b></div>' : '') +
+        (skippedL.length ? '<div class="kv"><span>Överhoppade månader</span><b>' + skippedL.map(monthLabel).join(', ') + '</b></div>' : '') +
         amortHtml +
         (hist ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);"><span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;">Extra amorteringar</span>' + hist + '</div>' : '') +
         '<div class="mini-actions">' +
           '<button class="btn small primary" data-extra="' + l.id + '">+ Extra amortering</button>' +
+          (isAutoL ? '<button class="btn small ghost" data-loan-skip="' + l.id + '">Hoppa över ' + esc(monthLabel(nextAutoL).toLowerCase()) + '</button>' : '') +
           '<button class="btn small ghost" data-edit="loan" data-id="' + l.id + '">Ändra</button>' +
           '<button class="btn small ghost" data-del="loan" data-id="' + l.id + '">Ta bort</button>' +
         '</div>' +
@@ -1127,7 +1186,7 @@
 
     var lede = filter
       ? ('Visar bara ' + esc(filter) + '. Byt till "Hushåll (alla)" i menyn för alla lån.')
-      : 'Håll koll på skuld, ordinarie betalning och extra amorteringar. Räntesiffrorna är en uppskattning baserad på jämn månadsbetalning – kan skilja sig något från exakta belopp i t.ex. Klarna-appen.';
+      : 'Håll koll på skuld, ordinarie betalning och extra amorteringar. Ordinarie betalning dras av från skulden automatiskt varje månad – vill ni hoppa över en enstaka månad finns en knapp för det på kortet. Räntesiffrorna är en uppskattning baserad på jämn månadsbetalning – kan skilja sig något från exakta belopp i t.ex. Klarna-appen.';
     return '<div class="topbar"><div><h1>Lån &amp; skulder</h1><p class="lede">' + lede + '</p></div></div>' +
       form + '<div class="loan-grid">' + cards + '</div>';
   }
@@ -1146,7 +1205,7 @@
         field('Sparande/mån (valfritt)', '<input name="manadsSparande" type="number" min="0" step="0.01" placeholder="Lämna tomt om oregelbundet" value="' + (it&&it.manadsSparande?it.manadsSparande:'') + '">') +
         field('Kommentar', '<input name="kommentar" placeholder="Valfritt" value="' + (it?esc(it.kommentar||""):'') + '">') +
       '</div>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Sparar ni oregelbundet (t.ex. aktier) utan ett bestämt mål eller fast månadsbelopp – lämna "Målbelopp" och "Sparande/mån" tomma. Använd sedan "+ Extra insättning" på kortet varje gång ni lägger in pengar.</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Sparar ni oregelbundet (t.ex. aktier) utan ett bestämt mål eller fast månadsbelopp – lämna "Målbelopp" och "Sparande/mån" tomma. Använd sedan "+ Extra insättning" på kortet varje gång ni lägger in pengar. Fyller ni i "Sparande/mån" läggs det beloppet till automatiskt varje månad, utan att ni behöver göra något – vill ni hoppa över en enstaka månad finns en knapp för det på kortet.</p>' +
       formActions(it) + '</form>';
 
     var cards = filterByPerson(state.goals||[]).map(function(g){
@@ -1154,6 +1213,9 @@
       var pct = hasMal ? Math.min(100, Math.round(g.sparat/g.mal*100)) : 0;
       var kvar = Math.max(0, g.mal - g.sparat);
       var months = hasMal && g.manadsSparande > 0 ? Math.ceil(kvar/g.manadsSparande) : null;
+      var isAuto = g.manadsSparande > 0;
+      var nextAuto = isAuto ? nextAutoMonthFor(g) : null;
+      var skippedG = g.skippedMonths || [];
       var hist = (g.historik||[]).slice().sort(function(a,b){return b.datum.localeCompare(a.datum);}).slice(0,4).map(function(h){
         return '<div class="kv"><span>' + esc(h.datum) + (h.kommentar?' · '+esc(h.kommentar):'') + '</span><b>+' + fmtKr(h.belopp) + '</b></div>';
       }).join("");
@@ -1167,9 +1229,12 @@
           : '<div class="kv"><span>Sparat totalt</span><b>' + fmtKr(g.sparat) + '</b></div>') +
         (g.manadsSparande > 0 ? '<div class="kv"><span>Sparande/mån</span><b>' + fmtKr(g.manadsSparande) + '</b></div>' : '') +
         (hasMal ? '<div class="kv"><span>Tid kvar</span><b>' + (months!=null ? (months + ' mån') : '–') + '</b></div>' : '') +
+        (isAuto ? '<div class="kv"><span>Nästa automatiska insättning</span><b>' + esc(monthLabel(nextAuto)) + '</b></div>' : '') +
+        (skippedG.length ? '<div class="kv"><span>Överhoppade månader</span><b>' + skippedG.map(monthLabel).join(', ') + '</b></div>' : '') +
         (hist ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);"><span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;">Senaste insättningar</span>' + hist + '</div>' : '') +
         '<div class="mini-actions">' +
           '<button class="btn small primary" data-goal-extra="' + g.id + '">+ Extra insättning</button>' +
+          (isAuto ? '<button class="btn small ghost" data-goal-skip="' + g.id + '">Hoppa över ' + esc(monthLabel(nextAuto).toLowerCase()) + '</button>' : '') +
           '<button class="btn small ghost" data-edit="goal" data-id="' + g.id + '">Ändra</button>' +
           '<button class="btn small ghost" data-del="goal" data-id="' + g.id + '">Ta bort</button>' +
         '</div>' +
@@ -1282,6 +1347,26 @@
         if (!goal) return;
         ui.modal = { type: "goalExtra", goalId: goal.id };
         render();
+      });
+    });
+    app.querySelectorAll('[data-loan-skip]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var loan = findItem("loans", btn.getAttribute('data-loan-skip'));
+        if (!loan) return;
+        var next = nextAutoMonthFor(loan);
+        loan.skippedMonths = loan.skippedMonths || [];
+        if (loan.skippedMonths.indexOf(next) === -1) loan.skippedMonths.push(next);
+        persist();
+      });
+    });
+    app.querySelectorAll('[data-goal-skip]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var goal = findItem("goals", btn.getAttribute('data-goal-skip'));
+        if (!goal) return;
+        var next = nextAutoMonthFor(goal);
+        goal.skippedMonths = goal.skippedMonths || [];
+        if (goal.skippedMonths.indexOf(next) === -1) goal.skippedMonths.push(next);
+        persist();
       });
     });
 
