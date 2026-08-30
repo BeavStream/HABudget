@@ -328,8 +328,8 @@
     rows.push(["Summa","","", sum(incRows, function(x){ return x.belopp; })]);
     rows.push([]);
     rows.push(["FASTA KOSTNADER (grundbelopp, nuvarande)"]);
-    rows.push(["Kategori","Person","Grundbelopp/mån","Spending-budget","Gemensamt konto-budget"]);
-    (state.fixedCosts||[]).forEach(function(x){ rows.push([x.kategori, x.person||"", x.belopp, x.isSpendingBudget?"Ja":"", x.isJointBudget?"Ja":""]); });
+    rows.push(["Kategori","Person","Grundbelopp/mån","Gemensamt konto-budget"]);
+    (state.fixedCosts||[]).forEach(function(x){ rows.push([x.kategori, x.person||"", x.belopp, x.isJointBudget?"Ja":""]); });
     rows.push(["Summa grundbelopp","", monthlyFixed(), ""]);
     rows.push([]);
     rows.push(["FASTA KOSTNADER - MÅNADSJUSTERINGAR" + (period.mode==="all" ? "" : " (" + exportPeriodLabel(period) + ")")]);
@@ -353,7 +353,7 @@
     rows.push(["RÖRLIGA KOSTNADER" + (period.mode==="all" ? "" : " (" + exportPeriodLabel(period) + ")")]);
     rows.push(["Datum","Kategori","Person","Konto","Kommentar","Belopp","Skapad"]);
     periodExpensesFor(period).slice().sort(function(a,b){ return (a.datum||"").localeCompare(b.datum||""); }).forEach(function(e){
-      rows.push([e.datum, e.kategori, e.person, e.konto==="gemensamt"?"Gemensamt konto":e.konto==="spending"?"Spending":"Eget konto", e.kommentar||"", e.belopp, e.createdAt||""]);
+      rows.push([e.datum, e.kategori, e.person, e.konto==="gemensamt"?"Gemensamt konto":"Eget konto", e.kommentar||"", e.belopp, e.createdAt||""]);
     });
     rows.push([]);
     rows.push(["SPARANDE & MÅL (nuvarande läge)"]);
@@ -429,8 +429,7 @@
           var row = rows[i];
           if (row[0] !== "Summa grundbelopp" && row[0]) {
             var fc = { id: uid(), kategori: row[0], belopp: parseFloat(row[2])||0, person: row[1]||"" };
-            if ((row[3]||"") === "Ja") fc.isSpendingBudget = true;
-            if ((row[4]||"") === "Ja") fc.isJointBudget = true;
+            if ((row[3]||"") === "Ja") fc.isJointBudget = true;
             result.fixedCosts.push(fc);
             fixedByKategori[row[0]] = fc;
             addPerson(row[1]);
@@ -478,7 +477,7 @@
           var row = rows[i];
           if (row[0]) {
             var kontoLabel = row[3]||"";
-            var konto = kontoLabel === "Gemensamt konto" ? "gemensamt" : kontoLabel === "Spending" ? "spending" : "eget";
+            var konto = kontoLabel === "Gemensamt konto" ? "gemensamt" : "eget";
             result.expenses.push({ id: uid(), datum: row[0], kategori: row[1]||"", person: row[2]||"", konto: konto, kommentar: row[4]||"", belopp: parseFloat(row[5])||0, createdAt: row[6] || new Date().toISOString() });
             addPerson(row[2]);
           }
@@ -910,15 +909,11 @@
     return '<form class="card form-card" data-form="fixed" data-id="' + (it?it.id:'') + '">' +
       '<h3>' + (it?'Ändra fast kostnad':'Lägg till fast kostnad') + '</h3>' +
       '<div class="form-grid">' +
-        field('Kategori', '<input name="kategori" placeholder="Hyra, försäkring, abonnemang, spendingpengar…" value="' + (it?esc(it.kategori):'') + '" required>') +
+        field('Kategori', '<input name="kategori" placeholder="Hyra, försäkring, abonnemang…" value="' + (it?esc(it.kategori):'') + '" required>') +
         field('Grundbelopp/man', '<input name="belopp" type="number" min="0" step="0.01" value="' + (it?it.belopp:'') + '" required>') +
         field('Person', '<select name="person">' + personOpts + '</select>') +
       '</div>' +
       '<label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:12.5px;color:var(--text-muted);cursor:pointer;">' +
-        '<input type="checkbox" name="isSpendingBudget" style="width:auto;height:auto;padding:0;border:none;margin-top:2px;"' + (it&&it.isSpendingBudget?' checked':'') + '>' +
-        '<span>Det här är en spending-budget – jämförs mot kostnader taggade "Spending" i Rörliga kostnader, så ni ser vad som är kvar.</span>' +
-      '</label>' +
-      '<label style="display:flex;align-items:flex-start;gap:8px;margin-top:8px;font-size:12.5px;color:var(--text-muted);cursor:pointer;">' +
         '<input type="checkbox" name="isJointBudget" style="width:auto;height:auto;padding:0;border:none;margin-top:2px;"' + (it&&it.isJointBudget?' checked':'') + '>' +
         '<span>Det här är en överföring till Gemensamt konto – läggs ihop med andra sådana poster och jämförs mot kostnader taggade "Gemensamt konto" i Rörliga kostnader, så ni ser vad som är kvar på kontot.</span>' +
       '</label>' +
@@ -941,7 +936,6 @@
       var eff = fixedEffectiveAmount(x, mk);
       var overridden = eff !== x.belopp;
       return '<tr><td>' + esc(x.kategori) +
-          (x.isSpendingBudget ? ' <span class="rowchip" style="color:var(--warn);display:inline-flex;"><span class="dot" style="background:var(--warn);"></span>Spending-budget</span>' : '') +
           (x.isJointBudget ? ' <span class="rowchip" style="color:var(--accent-strong);display:inline-flex;"><span class="dot" style="background:var(--accent);"></span>Gemensamt konto</span>' : '') +
         '</td>' +
         '<td><span class="rowchip"><span class="dot" style="background:' + personColor(x.person) + '"></span>' + esc(x.person||"") + '</span></td>' +
@@ -965,29 +959,6 @@
       : 'Grundbeloppet gäller varje månad automatiskt. Skiljer en kostnad sig en enskild månad (t.ex. el) – justera bara den månaden, grundbeloppet påverkas inte.';
     return '<div class="topbar"><div><h1>Fasta kostnader</h1><p class="lede">' + lede + '</p></div>' + monthPicker() + '</div>' +
       fixedForm(it) + table;
-  }
-
-  function spendingBudgetSection(mk, filter){
-    var flagged = (state.fixedCosts||[]).filter(function(x){ return x.isSpendingBudget; });
-    var people = [];
-    flagged.forEach(function(x){ if (people.indexOf(x.person) === -1) people.push(x.person); });
-    people = people.filter(function(p){ return !filter || p === filter; });
-    if (!people.length) return "";
-    var cards = people.map(function(p){
-      var budget = sum(flagged.filter(function(x){ return x.person === p; }), function(x){ return fixedEffectiveAmount(x, mk); });
-      var spent = sum(expensesInMonth(mk).filter(function(e){ return e.konto === "spending" && e.person === p; }), function(e){ return e.belopp; });
-      var left = budget - spent;
-      var over = left < 0;
-      var pct = budget > 0 ? Math.min(100, Math.round(spent/budget*100)) : 0;
-      return '<div class="card goal-card">' +
-        '<h4>' + esc(p) + '</h4>' +
-        '<span class="rowchip" style="margin-bottom:6px;"><span class="dot" style="background:' + personColor(p) + '"></span>Spending – ' + esc(monthLabel(mk)) + '</span>' +
-        '<div class="progress"><div style="width:' + pct + '%;' + (over?'background:var(--danger);':'') + '"></div></div>' +
-        '<div class="kv"><span>Kvar</span><b style="' + (over?'color:var(--danger);':'color:var(--accent-strong);') + '">' + fmtKr(left) + '</b></div>' +
-        '<div class="kv"><span>Spenderat</span><b>' + fmtKr(spent) + ' av ' + fmtKr(budget) + '</b></div>' +
-      '</div>';
-    }).join("");
-    return '<div class="section"><h2>Spending-budget</h2><div class="loan-grid">' + cards + '</div></div>';
   }
 
   function jointAccountSection(mk){
@@ -1021,7 +992,7 @@
       return '<div class="kv"><span>' + esc(c) + '</span><b>' + fmtKr(byCat[c]) + '</b></div>';
     }).join("") || '<div class="empty">Inga kostnader denna månad.</div>';
     var byKonto = {};
-    items.forEach(function(e){ var k = e.konto==="gemensamt" ? "Gemensamt konto" : e.konto==="spending" ? "Spending" : "Eget konto"; byKonto[k] = (byKonto[k]||0) + e.belopp; });
+    items.forEach(function(e){ var k = e.konto==="gemensamt" ? "Gemensamt konto" : "Eget konto"; byKonto[k] = (byKonto[k]||0) + e.belopp; });
     var kontoRows = Object.keys(byKonto).sort().map(function(k){
       return '<div class="kv"><span>' + esc(k) + '</span><b>' + fmtKr(byKonto[k]) + '</b></div>';
     }).join("");
@@ -1030,8 +1001,8 @@
     var catOptions = EXPENSE_CATS.map(function(c){ return '<option ' + (it&&it.kategori===c?'selected':'') + '>' + esc(c) + '</option>'; }).join("");
     var personOptions = (state.people||[]).map(function(p){ return '<option ' + ((it?it.person===p:p===currentAuthor())?'selected':'') + '>' + esc(p) + '</option>'; }).join("");
     var kontoVal = it ? (it.konto || "eget") : "eget";
-    var kontoOptions = ['eget','gemensamt','spending'].map(function(v){
-      var label = v==="eget" ? "Eget konto" : v==="gemensamt" ? "Gemensamt konto" : "Spending";
+    var kontoOptions = ['eget','gemensamt'].map(function(v){
+      var label = v==="eget" ? "Eget konto" : "Gemensamt konto";
       return '<option value="' + v + '"' + (kontoVal===v?' selected':'') + '>' + label + '</option>';
     }).join("");
     var form = '<form class="card form-card" data-form="expense" data-id="' + (it?it.id:'') + '">' +
@@ -1044,14 +1015,12 @@
         field('Konto', '<select name="konto">' + kontoOptions + '</select>') +
         field('Kommentar', '<input name="kommentar" placeholder="Valfritt" value="' + (it?esc(it.kommentar||""):'') + '">') +
       '</div>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Betalade du med pengar som redan låg på det gemensamma kontot (t.ex. en tidigare överföring)? Välj "Gemensamt konto" så syns det separat nedan. Betalade du med dina egna spendingpengar? Välj "Spending" så dras det av från spending-budgeten nedan. Annars "Eget konto" som vanligt.</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Betalade du med pengar som redan låg på det gemensamma kontot (t.ex. en tidigare överföring)? Välj "Gemensamt konto" så syns det separat nedan och dras av från kontots budget. Annars "Eget konto" som vanligt.</p>' +
       formActions(it) + '</form>';
 
     var rows = items.map(function(e){
       var kontoChip = e.konto==="gemensamt"
         ? '<span class="rowchip" style="color:var(--accent-strong);"><span class="dot" style="background:var(--accent);"></span>Gemensamt</span>'
-        : e.konto==="spending"
-        ? '<span class="rowchip" style="color:var(--warn);"><span class="dot" style="background:var(--warn);"></span>Spending</span>'
         : '<span style="color:var(--text-muted);font-size:12.5px;">Eget</span>';
       return '<tr><td>' + esc(e.datum) + '</td><td>' + esc(e.kategori) + '</td>' +
         '<td><span class="rowchip"><span class="dot" style="background:' + personColor(e.person) + '"></span>' + esc(e.person) + '</span></td>' +
@@ -1078,8 +1047,7 @@
         '</div>' +
         table +
       '</div>' +
-      jointAccountSection(mk) +
-      spendingBudgetSection(mk, filter);
+      jointAccountSection(mk);
   }
 
   function lanView(){
@@ -1514,7 +1482,7 @@
           obj[name] = numeric.indexOf(name) >= 0 ? parseFloat(val)||0 : val;
         });
         if (type === "expense") obj.createdAt = obj.createdAt || new Date().toISOString();
-        if (type === "fixed") { obj.isSpendingBudget = fd.has('isSpendingBudget'); obj.isJointBudget = fd.has('isJointBudget'); }
+        if (type === "fixed") obj.isJointBudget = fd.has('isJointBudget');
         if (type === "loan" && !existing) obj.historik = [];
         if (!existing) state[key].push(obj);
         ui.editing = null; saveUi();
