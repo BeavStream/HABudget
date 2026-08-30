@@ -80,6 +80,9 @@ async def ws_endpoint(websocket: WebSocket):
                 msg = json.loads(raw)
             except (ValueError, TypeError):
                 continue
+            if msg.get("type") == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+                continue
             if msg.get("type") == "state" and isinstance(msg.get("state"), dict):
                 async with state_lock:
                     state = msg["state"]

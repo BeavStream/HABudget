@@ -559,6 +559,8 @@
   var ws = null;
   var wsRetryDelay = 1000;
   var wsPingTimer = null;
+  var wsWatchdogTimer = null;
+  var lastPongAt = 0;
   var receivingRemote = false; // true while applying a state message from the server, to avoid feedback loops
   var pendingState = null; // last edit we tried to send but haven't had confirmed by the server yet
 
@@ -576,25 +578,41 @@
     var el = document.activeElement;
     return !!(el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT"));
   }
+  function sendPendingState(){
+    if (pendingState && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "state", state: pendingState }));
+    }
+  }
   function connectWs(){
     try { ws = new WebSocket(wsUrl()); } catch(e){ scheduleReconnect(); return; }
     ws.addEventListener('open', function(){
       wsRetryDelay = 1000;
+      lastPongAt = Date.now();
       // Some proxies (e.g. remote-access tunnels) close idle WebSocket connections
-      // after a period of inactivity. A small periodic ping keeps the connection
-      // classified as active so it doesn't get dropped just from sitting open.
+      // after a period of inactivity, or silently drop a connection without either
+      // side noticing right away ("zombie" connection). A ping/pong heartbeat both
+      // keeps the connection active and detects a zombie one quickly, instead of
+      // waiting on the browser's own much slower dead-connection detection.
       clearInterval(wsPingTimer);
       wsPingTimer = setInterval(function(){
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
-      }, 25000);
+        if (!(ws && ws.readyState === WebSocket.OPEN)) return;
+        if (Date.now() - lastPongAt > 20000) { try { ws.close(); } catch(e){} return; }
+        ws.send(JSON.stringify({ type: "ping" }));
+      }, 8000);
+      // Belt-and-braces: also periodically re-send an edit that's still unconfirmed,
+      // in case a send (the resend below included) reached a dead connection and was
+      // silently swallowed rather than raising an error.
+      clearInterval(wsWatchdogTimer);
+      wsWatchdogTimer = setInterval(sendPendingState, 5000);
       // A local edit made while disconnected (or one whose send never got confirmed
       // before the connection dropped) must not be silently lost - resend it now
       // rather than waiting for the server's next message to (maybe) overwrite it.
-      if (pendingState) ws.send(JSON.stringify({ type: "state", state: pendingState }));
+      sendPendingState();
     });
     ws.addEventListener('message', function(ev){
       var msg;
       try { msg = JSON.parse(ev.data); } catch(e){ return; }
+      if (msg.type === "pong") { lastPongAt = Date.now(); return; }
       if (msg.type === "state" && msg.state) {
         // If we have an unconfirmed local edit newer than what the server just sent,
         // the server hasn't seen it yet (e.g. it arrived from before a reconnect) -
@@ -602,7 +620,7 @@
         if (pendingState && (!msg.state.updatedAt || pendingState.updatedAt > msg.state.updatedAt)) {
           canPublish = true;
           publishChecked = true;
-          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "state", state: pendingState }));
+          sendPendingState();
           return;
         }
         pendingState = null;
@@ -619,6 +637,7 @@
     });
     ws.addEventListener('close', function(){
       clearInterval(wsPingTimer);
+      clearInterval(wsWatchdogTimer);
       canPublish = false;
       publishChecked = true;
       if (unlockedYet && !activeElementIsFormField()) render();
