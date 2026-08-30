@@ -328,8 +328,8 @@
     rows.push(["Summa","","", sum(incRows, function(x){ return x.belopp; })]);
     rows.push([]);
     rows.push(["FASTA KOSTNADER (grundbelopp, nuvarande)"]);
-    rows.push(["Kategori","Person","Grundbelopp/mån","Spending-budget"]);
-    (state.fixedCosts||[]).forEach(function(x){ rows.push([x.kategori, x.person||"", x.belopp, x.isSpendingBudget?"Ja":""]); });
+    rows.push(["Kategori","Person","Grundbelopp/mån","Spending-budget","Gemensamt konto-budget"]);
+    (state.fixedCosts||[]).forEach(function(x){ rows.push([x.kategori, x.person||"", x.belopp, x.isSpendingBudget?"Ja":"", x.isJointBudget?"Ja":""]); });
     rows.push(["Summa grundbelopp","", monthlyFixed(), ""]);
     rows.push([]);
     rows.push(["FASTA KOSTNADER - MÅNADSJUSTERINGAR" + (period.mode==="all" ? "" : " (" + exportPeriodLabel(period) + ")")]);
@@ -430,6 +430,7 @@
           if (row[0] !== "Summa grundbelopp" && row[0]) {
             var fc = { id: uid(), kategori: row[0], belopp: parseFloat(row[2])||0, person: row[1]||"" };
             if ((row[3]||"") === "Ja") fc.isSpendingBudget = true;
+            if ((row[4]||"") === "Ja") fc.isJointBudget = true;
             result.fixedCosts.push(fc);
             fixedByKategori[row[0]] = fc;
             addPerson(row[1]);
@@ -855,7 +856,8 @@
       '<div class="section"><h2>Skulder &amp; sparande just nu</h2><div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">' +
         stat("Total skuld", totalDebt(fLoans), "", filter ? filter : "alla lån") +
         stat("Totalt sparat", totalSaved(fGoals), "positive", filter ? filter : "alla sparmål") +
-      '</div></div>';
+      '</div></div>' +
+      jointAccountSection(mk);
   }
 
   function stat(label, value, cls, sub){
@@ -916,6 +918,10 @@
         '<input type="checkbox" name="isSpendingBudget" style="width:auto;height:auto;padding:0;border:none;margin-top:2px;"' + (it&&it.isSpendingBudget?' checked':'') + '>' +
         '<span>Det här är en spending-budget – jämförs mot kostnader taggade "Spending" i Rörliga kostnader, så ni ser vad som är kvar.</span>' +
       '</label>' +
+      '<label style="display:flex;align-items:flex-start;gap:8px;margin-top:8px;font-size:12.5px;color:var(--text-muted);cursor:pointer;">' +
+        '<input type="checkbox" name="isJointBudget" style="width:auto;height:auto;padding:0;border:none;margin-top:2px;"' + (it&&it.isJointBudget?' checked':'') + '>' +
+        '<span>Det här är en överföring till Gemensamt konto – läggs ihop med andra sådana poster och jämförs mot kostnader taggade "Gemensamt konto" i Rörliga kostnader, så ni ser vad som är kvar på kontot.</span>' +
+      '</label>' +
       formActions(it) + '</form>';
   }
   function field(label, html){ return '<div class="field"><label>' + esc(label) + '</label>' + html + '</div>'; }
@@ -934,7 +940,10 @@
     var rows = items.map(function(x){
       var eff = fixedEffectiveAmount(x, mk);
       var overridden = eff !== x.belopp;
-      return '<tr><td>' + esc(x.kategori) + (x.isSpendingBudget ? ' <span class="rowchip" style="color:var(--warn);display:inline-flex;"><span class="dot" style="background:var(--warn);"></span>Spending-budget</span>' : '') + '</td>' +
+      return '<tr><td>' + esc(x.kategori) +
+          (x.isSpendingBudget ? ' <span class="rowchip" style="color:var(--warn);display:inline-flex;"><span class="dot" style="background:var(--warn);"></span>Spending-budget</span>' : '') +
+          (x.isJointBudget ? ' <span class="rowchip" style="color:var(--accent-strong);display:inline-flex;"><span class="dot" style="background:var(--accent);"></span>Gemensamt konto</span>' : '') +
+        '</td>' +
         '<td><span class="rowchip"><span class="dot" style="background:' + personColor(x.person) + '"></span>' + esc(x.person||"") + '</span></td>' +
         '<td class="num">' + fmtKr(x.belopp) + '</td>' +
         '<td class="num tabular" style="' + (overridden ? 'font-weight:600;color:var(--accent-strong);' : '') + '">' + fmtKr(eff) + (overridden ? ' *' : '') + '</td>' +
@@ -979,6 +988,26 @@
       '</div>';
     }).join("");
     return '<div class="section"><h2>Spending-budget</h2><div class="loan-grid">' + cards + '</div></div>';
+  }
+
+  function jointAccountSection(mk){
+    var flagged = (state.fixedCosts||[]).filter(function(x){ return x.isJointBudget; });
+    if (!flagged.length) return "";
+    // One shared pool, not split per person - everyone's overföringar count toward
+    // the same "Gemensamt konto", so this ignores the person filter on purpose.
+    var budget = sum(flagged, function(x){ return fixedEffectiveAmount(x, mk); });
+    var spent = sum(expensesInMonth(mk).filter(function(e){ return e.konto === "gemensamt"; }), function(e){ return e.belopp; });
+    var left = budget - spent;
+    var over = left < 0;
+    var pct = budget > 0 ? Math.min(100, Math.round(spent/budget*100)) : 0;
+    var card = '<div class="card goal-card">' +
+      '<h4>Gemensamt konto</h4>' +
+      '<span class="rowchip" style="margin-bottom:6px;"><span class="dot" style="background:var(--accent);"></span>' + esc(monthLabel(mk)) + '</span>' +
+      '<div class="progress"><div style="width:' + pct + '%;' + (over?'background:var(--danger);':'') + '"></div></div>' +
+      '<div class="kv"><span>Tillgängligt</span><b style="' + (over?'color:var(--danger);':'color:var(--accent-strong);') + '">' + fmtKr(left) + '</b></div>' +
+      '<div class="kv"><span>Utnyttjat</span><b>' + fmtKr(spent) + ' av ' + fmtKr(budget) + '</b></div>' +
+    '</div>';
+    return '<div class="section"><h2>Gemensamt konto</h2><div class="loan-grid">' + card + '</div></div>';
   }
 
   function rorligaView(){
@@ -1049,6 +1078,7 @@
         '</div>' +
         table +
       '</div>' +
+      jointAccountSection(mk) +
       spendingBudgetSection(mk, filter);
   }
 
@@ -1484,7 +1514,7 @@
           obj[name] = numeric.indexOf(name) >= 0 ? parseFloat(val)||0 : val;
         });
         if (type === "expense") obj.createdAt = obj.createdAt || new Date().toISOString();
-        if (type === "fixed") obj.isSpendingBudget = fd.has('isSpendingBudget');
+        if (type === "fixed") { obj.isSpendingBudget = fd.has('isSpendingBudget'); obj.isJointBudget = fd.has('isJointBudget'); }
         if (type === "loan" && !existing) obj.historik = [];
         if (!existing) state[key].push(obj);
         ui.editing = null; saveUi();
