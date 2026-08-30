@@ -2,6 +2,7 @@ FROM python:3.12-alpine
 
 WORKDIR /app
 COPY app/ /app/
+COPY config.yaml /app/config.yaml
 RUN pip install --no-cache-dir \
       fastapi==0.115.6 \
       "uvicorn[standard]==0.32.1"

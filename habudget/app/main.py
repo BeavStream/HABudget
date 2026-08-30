@@ -28,9 +28,15 @@ SEED_FILE = APP_DIR / "seed-state.json"
 # browser that already has the old JS cached is forced to fetch the new one on the
 # very next update instead of silently keep running stale code (which is exactly
 # what happened before this existed - old code, new server, no visible mismatch).
-_config_yaml = (APP_DIR.parent / "config.yaml").read_text(encoding="utf-8")
-_version_match = re.search(r'version:\s*"([^"]+)"', _config_yaml)
-APP_VERSION = _version_match.group(1) if _version_match else "0"
+# Best-effort: never let a problem reading config.yaml take the whole app down.
+APP_VERSION = "0"
+try:
+    _config_yaml = (APP_DIR / "config.yaml").read_text(encoding="utf-8")
+    _version_match = re.search(r'version:\s*"([^"]+)"', _config_yaml)
+    if _version_match:
+        APP_VERSION = _version_match.group(1)
+except OSError:
+    pass
 
 _index_html = (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
 INDEX_HTML = (
