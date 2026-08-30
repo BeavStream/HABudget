@@ -192,11 +192,18 @@
     return m;
   }
   function loanAmortizationEstimate(loan){
+    // A loan with a restvärde (residual/balloon value, e.g. many car loans) never
+    // amortizes to zero - the ordinarie payments only pay down to the restvärde,
+    // which is still principal, not interest, and is paid separately at the end.
+    // Every calc below that touches "how much of the principal is paid off" needs
+    // to measure progress against (ursprungligt - restvärde), not ursprungligt.
+    var restvarde = loan.restvarde || 0;
+    var amortizable = Math.max(0, loan.ursprungligt - restvarde);
     // Manual override wins over everything: if the exact total interest is known
     // (e.g. copied straight from Klarna), use it directly instead of estimating it.
     if (loan.rantaOverride > 0) {
       var paidSoFarM = Math.max(0, loan.ursprungligt - loan.nuvarande);
-      var progressM = loan.ursprungligt > 0 ? Math.min(1, paidSoFarM / loan.ursprungligt) : 0;
+      var progressM = amortizable > 0 ? Math.min(1, paidSoFarM / amortizable) : 0;
       return {
         interestSoFar: loan.rantaOverride * progressM,
         monthsSoFar: loan.startdatum ? Math.max(0, monthsBetween(loan.startdatum, todayStr()) || 0) : null,
@@ -212,11 +219,15 @@
     if (loan.startdatum && loan.slutdatum) {
       var totalMonths = monthsBetween(loan.startdatum, loan.slutdatum);
       if (totalMonths && totalMonths > 0 && loan.ordinarie > 0) {
-        var lastPayment = loan.sistaBetalning > 0 ? loan.sistaBetalning : loan.ordinarie;
+        // With a restvärde, every month (including the last) is just the ordinarie
+        // payment - the balloon at the end is the separate restvärde field, not
+        // "sistaBetalning" (which is for an ordinary loan's slightly different last
+        // installment, e.g. a rounding difference - a different, smaller thing).
+        var lastPayment = restvarde > 0 ? loan.ordinarie : (loan.sistaBetalning > 0 ? loan.sistaBetalning : loan.ordinarie);
         var totalPayments = totalMonths > 1 ? (loan.ordinarie * (totalMonths - 1) + lastPayment) : lastPayment;
-        var totalInterestD = Math.max(0, totalPayments - loan.ursprungligt);
+        var totalInterestD = Math.max(0, totalPayments - amortizable);
         var paidSoFar = Math.max(0, loan.ursprungligt - loan.nuvarande);
-        var progress = loan.ursprungligt > 0 ? Math.min(1, paidSoFar / loan.ursprungligt) : 0;
+        var progress = amortizable > 0 ? Math.min(1, paidSoFar / amortizable) : 0;
         var monthsElapsed = monthsBetween(loan.startdatum, todayStr());
         var monthsRemainingD = Math.max(0, monthsBetween(todayStr(), loan.slutdatum) || 0);
         return {
@@ -340,10 +351,10 @@
     });
     rows.push([]);
     rows.push(["LÅN & SKULDER (nuvarande saldo)"]);
-    rows.push(["Namn","Person","Ursprungligt belopp","Ränta (%)","Nuvarande skuld","Ordinarie betalning/mån","Startdatum","Slutdatum","Sista betalning (om annan)","Ränta enligt Klarna (om känd)","Ränta betald hittills (uppsk.)","Total räntekostnad (uppsk.)"]);
+    rows.push(["Namn","Person","Ursprungligt belopp","Ränta (%)","Nuvarande skuld","Ordinarie betalning/mån","Startdatum","Slutdatum","Sista betalning (om annan)","Restvärde vid slut","Ränta enligt Klarna (om känd)","Ränta betald hittills (uppsk.)","Total räntekostnad (uppsk.)"]);
     (state.loans||[]).forEach(function(l){
       var a = loanAmortizationEstimate(l);
-      rows.push([l.namn, l.person||"", l.ursprungligt, l.ranta, l.nuvarande, l.ordinarie, l.startdatum||"", l.slutdatum||"", l.sistaBetalning||"", l.rantaOverride||"", a?Math.round(a.interestSoFar*100)/100:"", a?Math.round(a.totalInterest*100)/100:""]);
+      rows.push([l.namn, l.person||"", l.ursprungligt, l.ranta, l.nuvarande, l.ordinarie, l.startdatum||"", l.slutdatum||"", l.sistaBetalning||"", l.restvarde||"", l.rantaOverride||"", a?Math.round(a.interestSoFar*100)/100:"", a?Math.round(a.totalInterest*100)/100:""]);
     });
     rows.push([]);
     rows.push(["EXTRA AMORTERINGAR" + (period.mode==="all" ? "" : " (" + exportPeriodLabel(period) + ")")]);
@@ -454,7 +465,8 @@
               ursprungligt: parseFloat(row[2])||0, ranta: parseFloat(row[3])||0,
               nuvarande: parseFloat(row[4])||0, ordinarie: parseFloat(row[5])||0,
               startdatum: row[6]||"", slutdatum: row[7]||"",
-              sistaBetalning: parseFloat(row[8])||0, rantaOverride: parseFloat(row[9])||0,
+              sistaBetalning: parseFloat(row[8])||0, restvarde: parseFloat(row[9])||0,
+              rantaOverride: parseFloat(row[10])||0,
               historik: []
             };
             result.loans.push(loan);
@@ -1066,14 +1078,16 @@
         field('Startdatum (valfritt)', '<input name="startdatum" type="date" value="' + (it&&it.startdatum?it.startdatum:'') + '">') +
         field('Slutdatum (valfritt)', '<input name="slutdatum" type="date" value="' + (it&&it.slutdatum?it.slutdatum:'') + '">') +
         field('Sista betalning (om annan)', '<input name="sistaBetalning" type="number" min="0" step="0.01" placeholder="Lämna tomt om samma som ordinarie" value="' + (it&&it.sistaBetalning?it.sistaBetalning:'') + '">') +
+        field('Restvärde vid slut (valfritt)', '<input name="restvarde" type="number" min="0" step="0.01" placeholder="T.ex. ett billån med restvärde" value="' + (it&&it.restvarde?it.restvarde:'') + '">') +
         field('Total räntekostnad enligt Klarna (om känd)', '<input name="rantaOverride" type="number" min="0" step="0.01" placeholder="Skriv in Klarnas egen siffra för exakt match" value="' + (it&&it.rantaOverride?it.rantaOverride:'') + '">') +
       '</div>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Vet du den exakta totala räntekostnaden (t.ex. från Klarna-appen)? Fyll i den i sista fältet så används den direkt – garanterat rätt, ingen uträkning behövs. Annars räknas den fram från start-/slutdatum om de är ifyllda, eller från räntesatsen. "Ursprungligt belopp" ska vara ren köpeskilling utan ränta.</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Vet du den exakta totala räntekostnaden (t.ex. från Klarna-appen)? Fyll i den i sista fältet så används den direkt – garanterat rätt, ingen uträkning behövs. Annars räknas den fram från start-/slutdatum om de är ifyllda, eller från räntesatsen. "Ursprungligt belopp" ska vara ren köpeskilling utan ränta. Har lånet ett restvärde (t.ex. ett billån där en stor slutbetalning återstår när avtalet tar slut)? Fyll i det i "Restvärde vid slut" – det räknas som kvarvarande kapital, inte som ränta, och påverkar hur "betalt"-andelen och räntan räknas ut.</p>' +
       formActions(it) + '</form>';
 
     var cards = filterByPerson(state.loans||[]).map(function(l){
       var paid = Math.max(0, l.ursprungligt - l.nuvarande);
-      var pct = l.ursprungligt > 0 ? Math.min(100, Math.round(paid/l.ursprungligt*100)) : 0;
+      var amortizableL = Math.max(0, l.ursprungligt - (l.restvarde||0));
+      var pct = amortizableL > 0 ? Math.min(100, Math.round(paid/amortizableL*100)) : 0;
       var hist = (l.historik||[]).slice().sort(function(a,b){return b.datum.localeCompare(a.datum);}).slice(0,4).map(function(h){
         return '<div class="kv"><span>' + esc(h.datum) + ' · ' + esc(h.person||"") + '</span><b>+' + fmtKr(h.belopp) + '</b></div>';
       }).join("");
@@ -1095,11 +1109,12 @@
         '<h4>' + esc(l.namn) + '</h4>' +
         (l.person ? '<span class="rowchip" style="margin-bottom:6px;"><span class="dot" style="background:' + personColor(l.person) + '"></span>' + esc(l.person) + '</span>' : '') +
         '<div class="progress"><div style="width:' + pct + '%"></div></div>' +
-        '<div class="kv"><span>Betalt av ursprungligt</span><b>' + pct + ' %</b></div>' +
+        '<div class="kv"><span>' + (l.restvarde > 0 ? 'Betalt till restvärdet' : 'Betalt av ursprungligt') + '</span><b>' + pct + ' %</b></div>' +
         '<div class="kv"><span>Nuvarande skuld</span><b>' + fmtKr(l.nuvarande) + '</b></div>' +
         '<div class="kv"><span>Ursprungligt belopp</span><b>' + fmtKr(l.ursprungligt) + '</b></div>' +
         '<div class="kv"><span>Ränta</span><b>' + (l.ranta||0) + ' %</b></div>' +
         '<div class="kv"><span>Ordinarie betalning/mån</span><b>' + fmtKr(l.ordinarie) + '</b></div>' +
+        (l.restvarde > 0 ? '<div class="kv"><span>Restvärde vid lånets slut</span><b>' + fmtKr(l.restvarde) + '</b></div>' : '') +
         amortHtml +
         (hist ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);"><span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;">Extra amorteringar</span>' + hist + '</div>' : '') +
         '<div class="mini-actions">' +
@@ -1478,7 +1493,7 @@
         var existing = id ? findItem(key, id) : null;
         var obj = existing || { id: uid() };
         fd.forEach(function(val, name){
-          var numeric = ["belopp","brutto","ursprungligt","ranta","nuvarande","ordinarie","sistaBetalning","rantaOverride","mal","sparat","manadsSparande"];
+          var numeric = ["belopp","brutto","ursprungligt","ranta","nuvarande","ordinarie","sistaBetalning","restvarde","rantaOverride","mal","sparat","manadsSparande"];
           obj[name] = numeric.indexOf(name) >= 0 ? parseFloat(val)||0 : val;
         });
         if (type === "expense") obj.createdAt = obj.createdAt || new Date().toISOString();
