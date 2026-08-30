@@ -1126,11 +1126,10 @@
       '<div class="card form-card"><h3>Startmånad</h3><p style="font-size:13px;color:var(--text-muted);line-height:1.6;margin:0 0 10px;">' +
       'Räkna ingenting före det här datumet, oavsett vad en enskild post råkar ha för eget startdatum (t.ex. ett lån som egentligen togs år 2023). Lämna tomt om ni vill att varje post ska styras av sitt eget datum istället.</p>' +
       '<div class="form-grid" style="max-width:220px;">' + field('Räkna data från', '<input id="tracking-start" type="date" value="' + esc(state.trackingStart||"") + '">') + '</div></div>' +
-      '<div class="card form-card"><h3>Om delning</h3><p style="font-size:13px;color:var(--text-muted);line-height:1.6;margin:0 0 10px;">' +
-      'Sidan kräver lösenord för att öppnas – när ni skrivit in det rätt en gång kommer den enheten (telefon, dator …) ihåg det i ' + LOCK_DAYS + ' dagar, sedan måste ni skriva in det igen. ' +
+      '<div class="card form-card"><h3>Om åtkomst</h3><p style="font-size:13px;color:var(--text-muted);line-height:1.6;margin:0 0 10px;">' +
+      'Appen körs lokalt på er Home Assistant-maskin – det är er vanliga HA-inloggning som avgör vem som kommer åt den, samma sätt som resten av Home Assistant. ' +
       'Profilvalet ovan i menyn styr bara vilket namn som sätts på det ni registrerar, inte vem som får skriva. ' +
-      'Om ändringar bara sparas i webbläsaren (se meddelande högst upp) har appen tappat kontakten med servern på din Home Assistant-maskin – kolla att den är igång och att du är ansluten till samma nätverk.</p>' +
-      '<div class="form-actions"><button class="btn ghost small" id="lock-now">Lås den här enheten nu</button> <button class="btn ghost small" id="change-password">Byt lösenord</button></div></div>' +
+      'Om ändringar bara sparas i webbläsaren (se meddelande högst upp) har appen tappat kontakten med servern på din Home Assistant-maskin – kolla att den är igång och att du är ansluten till samma nätverk.</p></div>' +
       '<div class="card form-card"><h3>Nollställ</h3><p style="font-size:13px;color:var(--text-muted);line-height:1.6;margin:0 0 10px;">' +
       'Testar ni bara runt just nu? Här kan ni rensa bort alla inkomster, kostnader, lån och sparmål och börja helt om – utan att behöva be Claude om det. Namnen på hushållsmedlemmarna påverkas inte.</p>' +
       '<div class="form-actions"><button class="btn ghost small" id="reset-data" style="color:var(--danger);">Rensa all data</button></div></div>';
@@ -1461,6 +1460,10 @@
     render();
   }
 
-  connectWs(); // start connecting right away so state.lockHash is ready by the time someone submits the lock screen
-  if (isUnlocked()) { bootApp(); } else { renderLockScreen(); }
+  // No separate app-level password: Home Assistant's own login already gates who
+  // can reach this page at all (via ingress), so the extra lock screen would just
+  // be redundant - and it needs window.crypto.subtle, which browsers disable on
+  // plain http:// local addresses, breaking it outright on a typical home network.
+  connectWs();
+  bootApp();
 })();

@@ -1,5 +1,5 @@
 name: "Koll på Berget"
-version: "1.0.0"
+version: "1.0.1"
 slug: "habudget"
 description: "Delad hushållsbudget för familjen, med live-synk mellan enheter"
 url: "https://github.com/BeavStream/HABudget"
