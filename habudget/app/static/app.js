@@ -1509,7 +1509,14 @@
   // ---------- boot ----------
   (function loadCachedStateIfAny(){
     // Use a locally-cached copy as a starting point (avoids a blank flash) until
-    // the server sends the real, current state over the WebSocket.
+    // the server sends the real, current state over the WebSocket. Also treat it
+    // as a tentative pendingState: if it was never actually confirmed synced (e.g.
+    // the page got reloaded right after an edit made while disconnected), the
+    // normal pendingState-vs-server-state comparison on the first message from the
+    // server will correctly resend it instead of silently losing it to whatever
+    // (possibly older) state the server responds with. If it WAS already synced,
+    // this is a harmless no-op - the server's state will be the same or newer and
+    // win the comparison as usual.
     try {
       var s = localStorage.getItem('hb-state');
       if (s) {
@@ -1518,6 +1525,7 @@
         cached.trackingStart = cached.trackingStart || "";
         cached.lockHash = cached.lockHash || DEFAULT_LOCK_HASH;
         state = cached;
+        if (cached.updatedAt) pendingState = cached;
       }
     } catch(e){}
   })();
