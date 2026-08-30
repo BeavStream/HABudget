@@ -558,20 +558,54 @@
   // ---------- persistence (live sync via WebSocket to the local server) ----------
   var ws = null;
   var wsRetryDelay = 1000;
+  var wsPingTimer = null;
   var receivingRemote = false; // true while applying a state message from the server, to avoid feedback loops
+  var pendingState = null; // last edit we tried to send but haven't had confirmed by the server yet
 
   function wsUrl(){
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
     var base = location.pathname.replace(/\/+$/, "");
     return proto + "//" + location.host + base + "/ws";
   }
+  function activeElementIsFormField(){
+    // A render() rebuilds the whole page from scratch, which would wipe out anything
+    // the user is mid-typing (e.g. an amount not submitted yet). Connection-status
+    // updates arrive asynchronously at any time, so they must never force a render
+    // while the user has a field focused - only actions the user themselves triggers
+    // (submitting, clicking) are allowed to do that.
+    var el = document.activeElement;
+    return !!(el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT"));
+  }
   function connectWs(){
     try { ws = new WebSocket(wsUrl()); } catch(e){ scheduleReconnect(); return; }
-    ws.addEventListener('open', function(){ wsRetryDelay = 1000; });
+    ws.addEventListener('open', function(){
+      wsRetryDelay = 1000;
+      // Some proxies (e.g. remote-access tunnels) close idle WebSocket connections
+      // after a period of inactivity. A small periodic ping keeps the connection
+      // classified as active so it doesn't get dropped just from sitting open.
+      clearInterval(wsPingTimer);
+      wsPingTimer = setInterval(function(){
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
+      }, 25000);
+      // A local edit made while disconnected (or one whose send never got confirmed
+      // before the connection dropped) must not be silently lost - resend it now
+      // rather than waiting for the server's next message to (maybe) overwrite it.
+      if (pendingState) ws.send(JSON.stringify({ type: "state", state: pendingState }));
+    });
     ws.addEventListener('message', function(ev){
       var msg;
       try { msg = JSON.parse(ev.data); } catch(e){ return; }
       if (msg.type === "state" && msg.state) {
+        // If we have an unconfirmed local edit newer than what the server just sent,
+        // the server hasn't seen it yet (e.g. it arrived from before a reconnect) -
+        // keep our version and resend it instead of overwriting it with stale data.
+        if (pendingState && (!msg.state.updatedAt || pendingState.updatedAt > msg.state.updatedAt)) {
+          canPublish = true;
+          publishChecked = true;
+          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "state", state: pendingState }));
+          return;
+        }
+        pendingState = null;
         receivingRemote = true;
         state = msg.state;
         state.fixedOverrides = state.fixedOverrides || [];
@@ -580,13 +614,14 @@
         receivingRemote = false;
         canPublish = true;
         publishChecked = true;
-        if (unlockedYet) render();
+        if (unlockedYet && !activeElementIsFormField()) render();
       }
     });
     ws.addEventListener('close', function(){
+      clearInterval(wsPingTimer);
       canPublish = false;
       publishChecked = true;
-      if (unlockedYet) render();
+      if (unlockedYet && !activeElementIsFormField()) render();
       scheduleReconnect();
     });
     ws.addEventListener('error', function(){ try { ws.close(); } catch(e){} });
@@ -601,10 +636,10 @@
     state.updatedAt = new Date().toISOString();
     state.updatedBy = currentAuthor() || null;
     render();
+    pendingState = state;
+    try { localStorage.setItem('hb-state', JSON.stringify(state)); } catch(e){}
     if (canPublish && ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "state", state: state }));
-    } else {
-      try { localStorage.setItem('hb-state', JSON.stringify(state)); } catch(e){}
     }
   }
 
